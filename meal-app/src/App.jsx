@@ -184,6 +184,7 @@ function MealApp({ user }) {
   const [planning, setPlanning] = useState(null);
   const [routine, setRoutine] = useState(null);
   const [bought, setBought] = useState(null);
+  const [extraItems, setExtraItems] = useState(null);
   const [tab, setTab] = useState("planning");
   const [search, setSearch] = useState("");
   const [editing, setEditing] = useState(null);
@@ -200,6 +201,7 @@ function MealApp({ user }) {
       const p = data.planning || {};
       const rt = data.routine || {};
       const bt = data.bought || {};
+      const ex = data.extraItems || [];
 
       if (!autoUpdateDone.current) {
         autoUpdateDone.current = true;
@@ -229,6 +231,7 @@ function MealApp({ user }) {
       setPlanning(p);
       setRoutine(rt);
       setBought(bt);
+      setExtraItems(ex);
       setLoaded(true);
     });
     return unsub;
@@ -258,6 +261,17 @@ function MealApp({ user }) {
     if (next[itemKey]) delete next[itemKey];
     else next[itemKey] = true;
     saveBought(next);
+  }
+  function saveExtraItems(ex) {
+    setExtraItems(ex);
+    save("extraItems", ex);
+  }
+  function addExtraItem(name, qty, unit) {
+    if (!name.trim()) return;
+    saveExtraItems([...extraItems, { id: uid(), name: name.trim(), qty, unit }]);
+  }
+  function removeExtraItems(ids) {
+    saveExtraItems(extraItems.filter((i) => !ids.includes(i.id)));
   }
 
   function openNewRecipe() {
@@ -359,7 +373,7 @@ function MealApp({ user }) {
           const key = ing.name.trim().toLowerCase() + "|" + (ing.unit || "");
           const qty = parseFloat(ing.qty) || 0;
           if (!shoppingMap.has(key)) {
-            shoppingMap.set(key, { name: ing.name.trim(), unit: ing.unit, qty: 0, days: [] });
+            shoppingMap.set(key, { name: ing.name.trim(), unit: ing.unit, qty: 0, days: [], manualIds: [] });
           }
           const entry = shoppingMap.get(key);
           entry.qty += qty;
@@ -367,6 +381,18 @@ function MealApp({ user }) {
         });
       });
     });
+  });
+  extraItems.forEach((item) => {
+    if (!item.name.trim()) return;
+    const key = item.name.trim().toLowerCase() + "|" + (item.unit || "");
+    const qty = parseFloat(item.qty) || 0;
+    if (!shoppingMap.has(key)) {
+      shoppingMap.set(key, { name: item.name.trim(), unit: item.unit, qty: 0, days: [], manualIds: [] });
+    }
+    const entry = shoppingMap.get(key);
+    entry.qty += qty;
+    entry.manualIds.push(item.id);
+    if (!entry.days.some((x) => x.dateKey === "0000-00-00")) entry.days.push({ dateKey: "0000-00-00", label: "Achat libre" });
   });
   const shoppingList = Array.from(shoppingMap.entries())
     .map(([key, item]) => {
@@ -425,7 +451,9 @@ function MealApp({ user }) {
         {tab === "planning" && (
           <PlanningTab next7={next7} recipes={recipes} planning={planning} routine={routine} updateOverride={updateOverride} resetOverride={resetOverride} />
         )}
-        {tab === "courses" && <CoursesTab shoppingList={shoppingList} toggleBought={toggleBought} />}
+        {tab === "courses" && (
+          <CoursesTab shoppingList={shoppingList} toggleBought={toggleBought} addExtraItem={addExtraItem} removeExtraItems={removeExtraItems} />
+        )}
       </main>
 
       <nav style={S.nav}>
@@ -514,6 +542,7 @@ function RecettesTab({ search, setSearch, filteredRecipes, openNewRecipe, openEd
 }
 
 function PlanningTab({ next7, recipes, planning, routine, updateOverride, resetOverride }) {
+  const [expanded, setExpanded] = useState({});
   return (
     <div style={{ padding: "12px 16px 90px" }}>
       <p style={{ fontSize: 13, color: "#9B998F", marginBottom: 12 }}>Planning des 7 prochains jours — basé sur votre routine, modifiable jour par jour.</p>
@@ -526,9 +555,27 @@ function PlanningTab({ next7, recipes, planning, routine, updateOverride, resetO
           const isOverrideSoir = planning[dateKey]?.soir !== undefined;
           const midi = getEffectiveSlot(dateKey, weekday, "midi", planning, routine);
           const soir = getEffectiveSlot(dateKey, weekday, "soir", planning, routine);
+          const fullyAbsent = midi.hidden && soir.hidden;
+
+          if (fullyAbsent && !expanded[dateKey]) {
+            return (
+              <button key={dateKey} style={S.dayCollapsed} onClick={() => setExpanded((p) => ({ ...p, [dateKey]: true }))}>
+                <span style={{ fontSize: 13, color: "#B0AEA3", textTransform: "capitalize" }}>{label}</span>
+                <span style={{ fontSize: 12, color: "#C9C7BC", fontStyle: "italic" }}>Journée absente</span>
+              </button>
+            );
+          }
+
           return (
             <div key={dateKey} style={S.dayCard}>
-              <p style={S.dayLabel}>{label}</p>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <p style={S.dayLabel}>{label}</p>
+                {fullyAbsent && (
+                  <button style={S.linkBtnSm} onClick={() => setExpanded((p) => ({ ...p, [dateKey]: false }))}>
+                    Réduire
+                  </button>
+                )}
+              </div>
               <MealEditor
                 icon={<Sun size={14} color="#C98A3D" />}
                 label="Midi"
@@ -562,6 +609,26 @@ function PlanningTab({ next7, recipes, planning, routine, updateOverride, resetO
 }
 
 function MealEditor({ icon, label, recipes, hidden, recipeIds, onToggleHidden, onAddDish, onRemoveDish, showReset, onReset }) {
+  if (hidden) {
+    return (
+      <div style={S.mealBlockHidden}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, opacity: 0.6 }}>
+          {icon}
+          <span style={{ fontSize: 12.5, color: "#B0AEA3" }}>{label} — absent</span>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          {showReset && (
+            <button style={S.iconBtnXs} onClick={onReset} title="Revenir à la routine">
+              <RotateCcw size={12} color="#B0AEA3" />
+            </button>
+          )}
+          <button style={S.iconBtnXs} onClick={onToggleHidden} title="Réactiver ce repas">
+            <Eye size={12} color="#B0AEA3" />
+          </button>
+        </div>
+      </div>
+    );
+  }
   return (
     <div style={S.mealBlock}>
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -575,17 +642,13 @@ function MealEditor({ icon, label, recipes, hidden, recipeIds, onToggleHidden, o
             <RotateCcw size={13} color="#7A7A70" />
           </button>
         )}
-        <button style={S.iconBtnSm} onClick={onToggleHidden} title={hidden ? "Réactiver ce repas" : "Marquer comme absent"}>
-          {hidden ? <Eye size={14} color="#7A7A70" /> : <EyeOff size={14} color="#7A7A70" />}
+        <button style={S.iconBtnSm} onClick={onToggleHidden} title="Marquer comme absent">
+          <EyeOff size={14} color="#7A7A70" />
         </button>
       </div>
-      {hidden ? (
-        <p style={{ fontSize: 13, color: "#B8B6AC", fontStyle: "italic", margin: "6px 0 0" }}>Absent</p>
-      ) : (
-        <div style={{ marginTop: 6 }}>
-          <DishPicker recipes={recipes} selectedIds={recipeIds} onAdd={onAddDish} onRemove={onRemoveDish} />
-        </div>
-      )}
+      <div style={{ marginTop: 6 }}>
+        <DishPicker recipes={recipes} selectedIds={recipeIds} onAdd={onAddDish} onRemove={onRemoveDish} />
+      </div>
     </div>
   );
 }
@@ -611,9 +674,9 @@ function DishPicker({ recipes, selectedIds, onAdd, onRemove }) {
     <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
       {selected.map((r) => (
         <span key={r.id} style={S.chip}>
-          {r.name}
+          <span aria-hidden="true">{getRecipeEmoji(r.name)}</span> {r.name}
           <button style={S.chipX} onClick={() => onRemove(r.id)} aria-label={`Retirer ${r.name}`}>
-            <X size={11} color="#4E6B57" />
+            <X size={18} color="#4E6B57" />
           </button>
         </span>
       ))}
@@ -732,17 +795,45 @@ function RoutineModal({ recipes, routine, updateRoutineSlot, onClose }) {
   );
 }
 
-function CoursesTab({ shoppingList, toggleBought }) {
+function CoursesTab({ shoppingList, toggleBought, addExtraItem, removeExtraItems }) {
+  const [name, setName] = useState("");
+  const [qty, setQty] = useState("");
+  const [unit, setUnit] = useState("pièce(s)");
   const remaining = shoppingList.filter((i) => !i.isBought).length;
+
+  function submit(e) {
+    e.preventDefault();
+    if (!name.trim()) return;
+    addExtraItem(name, qty, unit);
+    setName("");
+    setQty("");
+  }
+
   return (
     <div style={{ padding: "12px 16px 90px" }}>
-      <p style={{ fontSize: 13, color: "#9B998F", marginBottom: 12 }}>
+      <p style={{ fontSize: 13, color: "#9B998F", marginBottom: 10 }}>
         Courses pour les 7 prochains jours{shoppingList.length > 0 ? ` — ${remaining} restant${remaining !== 1 ? "s" : ""}` : ""}
       </p>
+
+      <form onSubmit={submit} style={S.addItemRow}>
+        <input style={{ ...S.input, flex: 2 }} placeholder="Ajouter un article (ex : dentifrice)…" value={name} onChange={(e) => setName(e.target.value)} />
+        <input style={{ ...S.input, flex: 1 }} placeholder="Qté" type="number" value={qty} onChange={(e) => setQty(e.target.value)} />
+        <select style={{ ...S.select, flex: 1, padding: "8px 4px" }} value={unit} onChange={(e) => setUnit(e.target.value)}>
+          {UNITS.map((u) => (
+            <option key={u} value={u}>
+              {u}
+            </option>
+          ))}
+        </select>
+        <button type="submit" style={S.addBtnSm} aria-label="Ajouter">
+          <Plus size={16} color="#fff" />
+        </button>
+      </form>
+
       {shoppingList.length === 0 ? (
-        <p style={{ color: "#9B998F", fontSize: 14, textAlign: "center", marginTop: 24 }}>Aucun repas planifié pour l'instant.</p>
+        <p style={{ color: "#9B998F", fontSize: 14, textAlign: "center", marginTop: 24 }}>Rien à acheter pour l'instant.</p>
       ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 12 }}>
           {shoppingList.map((item) => (
             <div key={item.itemKey} style={{ ...S.shopItem, opacity: item.isBought ? 0.55 : 1 }}>
               <button
@@ -764,12 +855,17 @@ function CoursesTab({ shoppingList, toggleBought }) {
                 </p>
                 <div style={{ display: "flex", gap: 6, marginTop: 4, flexWrap: "wrap" }}>
                   {item.days.map((day) => (
-                    <span key={day.dateKey} style={S.dayBadge}>
+                    <span key={day.dateKey} style={day.dateKey === "0000-00-00" ? S.dayBadgeManual : S.dayBadge}>
                       {day.label}
                     </span>
                   ))}
                 </div>
               </div>
+              {item.manualIds.length > 0 && (
+                <button style={S.iconBtnSm} onClick={() => removeExtraItems(item.manualIds)} title="Retirer cet article">
+                  <Trash2 size={13} color="#B85C4A" />
+                </button>
+              )}
             </div>
           ))}
         </div>
@@ -868,14 +964,29 @@ const S = {
   searchBoxSm: { display: "flex", alignItems: "center", gap: 5, background: "#fff", border: "1px solid #EAE8DF", borderRadius: 8, padding: "6px 8px" },
   searchInputSm: { border: "none", outline: "none", flex: 1, fontSize: 12.5, background: "transparent" },
   addBtn: { width: 38, height: 38, borderRadius: 10, background: "#4E6B57", border: "none", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 },
+  addItemRow: { display: "flex", gap: 6, alignItems: "center" },
+  addBtnSm: { width: 36, height: 36, borderRadius: 8, background: "#4E6B57", border: "none", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 },
   recipeCard: { display: "flex", gap: 12, background: "#fff", border: "1px solid #EAE8DF", borderRadius: 12, padding: 10, alignItems: "center" },
   recipeThumb: { width: 52, height: 52, borderRadius: 8, background: "#EFF3EE", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", flexShrink: 0 },
   recipeName: { fontSize: 14.5, fontWeight: 500, color: "#2B2B26", margin: 0 },
   recipeMeta: { fontSize: 12, color: "#9B998F", marginTop: 3 },
   iconBtnSm: { width: 26, height: 26, borderRadius: 7, border: "1px solid #EAE8DF", background: "#fff", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 },
   dayCard: { background: "#fff", border: "1px solid #EAE8DF", borderRadius: 12, padding: 12 },
+  dayCollapsed: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    background: "#F4F3EE",
+    border: "1px dashed #DDDAD0",
+    borderRadius: 10,
+    padding: "8px 12px",
+    width: "100%",
+  },
+  linkBtnSm: { background: "none", border: "none", color: "#4E6B57", fontSize: 12, fontWeight: 500, padding: 0 },
   dayLabel: { fontSize: 13.5, fontWeight: 600, color: "#2B2B26", margin: "0 0 8px", textTransform: "capitalize" },
   mealBlock: { padding: "6px 0", borderTop: "1px solid #F1EFE6" },
+  mealBlockHidden: { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "3px 0", borderTop: "1px solid #F1EFE6" },
+  iconBtnXs: { width: 20, height: 20, borderRadius: 6, border: "none", background: "transparent", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 },
   select: { flex: 1, fontSize: 13, border: "1px solid #EAE8DF", borderRadius: 8, padding: "7px 8px", background: "#FBFAF6", color: "#2B2B26" },
   shopItem: { display: "flex", gap: 10, alignItems: "flex-start", background: "#fff", border: "1px solid #EAE8DF", borderRadius: 10, padding: "10px 12px" },
   checkCircle: {
@@ -893,8 +1004,9 @@ const S = {
   checkCircleDone: { background: "#4E6B57", borderColor: "#4E6B57" },
   addDishBtn: { width: 24, height: 24, borderRadius: 999, border: "1px solid #CFE0D4", background: "#EAF1EC", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 },
   dayBadge: { fontSize: 11, color: "#4E6B57", background: "#EAF1EC", borderRadius: 5, padding: "2px 7px" },
-  chip: { display: "inline-flex", alignItems: "center", gap: 4, background: "#EAF1EC", color: "#3C5443", fontSize: 12.5, borderRadius: 6, padding: "4px 4px 4px 9px" },
-  chipX: { width: 16, height: 16, borderRadius: 4, border: "none", background: "transparent", display: "flex", alignItems: "center", justifyContent: "center" },
+  dayBadgeManual: { fontSize: 11, color: "#8A6A3C", background: "#F5EBDA", borderRadius: 5, padding: "2px 7px" },
+  chip: { display: "inline-flex", alignItems: "center", gap: 7, background: "#EAF1EC", color: "#3C5443", fontSize: 24, fontWeight: 500, borderRadius: 10, padding: "9px 9px 9px 14px" },
+  chipX: { width: 28, height: 28, borderRadius: 7, border: "none", background: "transparent", display: "flex", alignItems: "center", justifyContent: "center" },
   dropdown: {
     position: "absolute",
     top: "calc(100% + 4px)",
