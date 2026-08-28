@@ -19,6 +19,7 @@ const JOURS_COURTS = ["Dim", "Lun", "Mar", "Mer", "Jeu", "Ven", "Sam"];
 // Icône automatique selon le nom du plat (pas de photo à stocker)
 const EMOJI_RULES = [
   [["pizza"], "🍕"],
+  [["apéro dinatoire"], "apéro", "🍺"],
   [["pâtes", "pasta", "spaghetti", "tagliatelle", "lasagne", "nouille"], "🍝"],
   [["poulet", "volaille", "dinde", "canard"], "🍗"],
   [["boeuf", "bœuf", "steak", "viande", "entrecote", "entrecôte", "agneau", "porc"], "🥩"],
