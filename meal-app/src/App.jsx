@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef } from "react";
 import {
-  Search, Plus, X, Clock, ShoppingCart, Calendar, ChefHat, Trash2, Check,
+  Search, Plus, X, Clock, ShoppingCart, ChefHat, Trash2, Check,
   EyeOff, Eye, Sun, Moon, Pencil, Repeat, RotateCcw, LogOut, Mail, Lock,
+  Home, Utensils, Users, ListChecks, ChevronLeft, ChevronRight,
 } from "lucide-react";
 import { auth, db } from "./firebase";
 import {
@@ -93,11 +94,37 @@ function traduireErreur(code) {
   return map[code] || "Une erreur est survenue, réessayez.";
 }
 
+const GARDE_OPTIONS = [
+  { id: "duarte", label: "Duarte", color: "#DA291C" },
+  { id: "bernadou", label: "Bernadou", color: "#0055A4" },
+  { id: "maison", label: "Maison", color: "#EC7FB0" },
+  { id: "centre", label: "Centre", color: "#F5C518" },
+];
+const HOLIDAY_PERIODS = [
+  { label: "Toussaint", start: "2026-10-17", end: "2026-11-02" },
+  { label: "Noël", start: "2026-12-19", end: "2027-01-04" },
+  { label: "Hiver", start: "2027-02-13", end: "2027-03-01" },
+  { label: "Printemps", start: "2027-04-10", end: "2027-04-26" },
+  { label: "Été", start: "2027-07-03", end: "2027-08-31" },
+];
+function isSchoolHoliday(dateKey) {
+  return HOLIDAY_PERIODS.some((p) => dateKey >= p.start && dateKey <= p.end);
+}
+const MOIS = ["Janvier", "Février", "Mars", "Avril", "Mai", "Juin", "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre"];
+const JOURS_SEMAINE_COURT = ["L", "M", "M", "J", "V", "S", "D"];
+function cycleGarde(current) {
+  const ids = GARDE_OPTIONS.map((o) => o.id);
+  if (!current) return ids[0];
+  const idx = ids.indexOf(current);
+  if (idx === -1 || idx === ids.length - 1) return null;
+  return ids[idx + 1];
+}
+
 const emptyRecipe = () => ({
   id: uid(),
   name: "",
   lastCooked: null,
-  ingredients: [{ id: uid(), name: "", qty: "", unit: "pièce(s)" }],
+  ingredients: [{ id: uid(), name: "", qty: "1", unit: "pièce(s)" }],
 });
 
 // --- Racine : gère l'état de connexion ---
@@ -109,7 +136,7 @@ export default function App() {
   if (user === undefined) {
     return (
       <div style={S.loadingWrap}>
-        <ChefHat size={28} color="#8AA593" />
+        <Home size={28} color="#8AA593" />
         <p style={{ color: "#8A8A82", fontSize: 14, marginTop: 8 }}>Chargement…</p>
       </div>
     );
@@ -148,10 +175,10 @@ function LoginScreen() {
       `}</style>
       <div style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "center", padding: 24 }}>
         <div style={{ textAlign: "center", marginBottom: 24 }}>
-          <ChefHat size={32} color="#4E6B57" />
-          <p style={{ fontSize: 19, fontWeight: 600, color: "#2B2B26", marginTop: 8 }}>Repas</p>
+          <Home size={32} color="#4E6B57" />
+          <p style={{ fontSize: 19, fontWeight: 600, color: "#2B2B26", marginTop: 8 }}>Lar Duarte</p>
           <p style={{ fontSize: 13, color: "#9B998F", marginTop: 4 }}>
-            {mode === "login" ? "Connectez-vous pour retrouver vos recettes" : "Créez votre compte"}
+            {mode === "login" ? "Connectez-vous pour retrouver votre espace famille" : "Créez votre compte"}
           </p>
         </div>
         <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
@@ -191,7 +218,9 @@ function MealApp({ user }) {
   const [routine, setRoutine] = useState(null);
   const [bought, setBought] = useState(null);
   const [extraItems, setExtraItems] = useState(null);
-  const [tab, setTab] = useState("planning");
+  const [garde, setGarde] = useState(null);
+  const [todos, setTodos] = useState(null);
+  const [tab, setTab] = useState("repas");
   const [search, setSearch] = useState("");
   const [editing, setEditing] = useState(null);
   const [routineOpen, setRoutineOpen] = useState(false);
@@ -208,6 +237,8 @@ function MealApp({ user }) {
       const rt = data.routine || {};
       const bt = data.bought || {};
       const ex = data.extraItems || [];
+      const gd = data.garde || {};
+      const td = data.todos || [];
 
       if (!autoUpdateDone.current) {
         autoUpdateDone.current = true;
@@ -238,6 +269,8 @@ function MealApp({ user }) {
       setRoutine(rt);
       setBought(bt);
       setExtraItems(ex);
+      setGarde(gd);
+      setTodos(td);
       setLoaded(true);
     });
     return unsub;
@@ -279,6 +312,30 @@ function MealApp({ user }) {
   function removeExtraItems(ids) {
     saveExtraItems(extraItems.filter((i) => !ids.includes(i.id)));
   }
+  function saveGarde(g) {
+    setGarde(g);
+    save("garde", g);
+  }
+  function updateGarde(dateKey, nextVal) {
+    const next = { ...garde };
+    if (nextVal === null) delete next[dateKey];
+    else next[dateKey] = nextVal;
+    saveGarde(next);
+  }
+  function saveTodos(t) {
+    setTodos(t);
+    save("todos", t);
+  }
+  function addTodo(text) {
+    if (!text.trim()) return;
+    saveTodos([...todos, { id: uid(), text: text.trim(), done: false }]);
+  }
+  function toggleTodo(id) {
+    saveTodos(todos.map((t) => (t.id === id ? { ...t, done: !t.done } : t)));
+  }
+  function deleteTodo(id) {
+    saveTodos(todos.filter((t) => t.id !== id));
+  }
 
   function openNewRecipe() {
     setEditing(emptyRecipe());
@@ -314,7 +371,7 @@ function MealApp({ user }) {
     });
   }
   function addIngredientRow() {
-    setEditing((prev) => ({ ...prev, ingredients: [...prev.ingredients, { id: uid(), name: "", qty: "", unit: "pièce(s)" }] }));
+    setEditing((prev) => ({ ...prev, ingredients: [...prev.ingredients, { id: uid(), name: "", qty: "1", unit: "pièce(s)" }] }));
   }
   function removeIngredientRow(idx) {
     setEditing((prev) => ({ ...prev, ingredients: prev.ingredients.filter((_, i) => i !== idx) }));
@@ -349,7 +406,7 @@ function MealApp({ user }) {
   if (!loaded) {
     return (
       <div style={S.loadingWrap}>
-        <ChefHat size={28} color="#8AA593" />
+        <Home size={28} color="#8AA593" />
         <p style={{ color: "#8A8A82", fontSize: 14, marginTop: 8 }}>Chargement…</p>
       </div>
     );
@@ -425,12 +482,20 @@ function MealApp({ user }) {
       `}</style>
 
       <header style={S.header}>
-        <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <ChefHat size={20} color="#4E6B57" />
-          <span style={S.headerTitle}>Repas</span>
+        <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <Home size={20} color="#4E6B57" />
+            <span style={S.headerTitle}>Lar Duarte</span>
+          </span>
+          {tab === "repas" && (
+            <button style={S.routineBtn} onClick={() => setTab("recettes")}>
+              <ChefHat size={14} color="#4E6B57" />
+              <span style={{ fontSize: 12.5, color: "#4E6B57", fontWeight: 500 }}>Recettes</span>
+            </button>
+          )}
         </span>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          {tab === "planning" && (
+          {tab === "repas" && (
             <button style={S.routineBtn} onClick={() => setRoutineOpen(true)}>
               <Repeat size={14} color="#4E6B57" />
               <span style={{ fontSize: 12.5, color: "#4E6B57", fontWeight: 500 }}>Routine</span>
@@ -454,18 +519,21 @@ function MealApp({ user }) {
             markCookedToday={markCookedToday}
           />
         )}
-        {tab === "planning" && (
+        {tab === "repas" && (
           <PlanningTab next7={next7} recipes={recipes} planning={planning} routine={routine} updateOverride={updateOverride} resetOverride={resetOverride} />
         )}
         {tab === "courses" && (
           <CoursesTab shoppingList={shoppingList} toggleBought={toggleBought} addExtraItem={addExtraItem} removeExtraItems={removeExtraItems} />
         )}
+        {tab === "calendrier" && <CalendrierTab garde={garde} updateGarde={updateGarde} />}
+        {tab === "todo" && <TodoTab todos={todos} addTodo={addTodo} toggleTodo={toggleTodo} deleteTodo={deleteTodo} />}
       </main>
 
       <nav style={S.nav}>
-        <NavBtn icon={<ChefHat size={20} />} label="Recettes" active={tab === "recettes"} onClick={() => setTab("recettes")} />
-        <NavBtn icon={<Calendar size={20} />} label="Planning" active={tab === "planning"} onClick={() => setTab("planning")} />
+        <NavBtn icon={<Utensils size={20} />} label="Repas" active={tab === "repas"} onClick={() => setTab("repas")} />
         <NavBtn icon={<ShoppingCart size={20} />} label="Courses" active={tab === "courses"} onClick={() => setTab("courses")} />
+        <NavBtn icon={<Users size={20} />} label="Garde" active={tab === "calendrier"} onClick={() => setTab("calendrier")} />
+        <NavBtn icon={<ListChecks size={20} />} label="To-do" active={tab === "todo"} onClick={() => setTab("todo")} />
       </nav>
 
       {editing && (
@@ -654,6 +722,166 @@ function MealEditor({ icon, label, recipes, hidden, recipeIds, onToggleHidden, o
       </div>
       <div style={{ marginTop: 6 }}>
         <DishPicker recipes={recipes} selectedIds={recipeIds} onAdd={onAddDish} onRemove={onRemoveDish} />
+      </div>
+    </div>
+  );
+}
+
+function CalendrierTab({ garde, updateGarde }) {
+  const [viewMonth, setViewMonth] = useState(() => {
+    const d = new Date();
+    return new Date(d.getFullYear(), d.getMonth(), 1);
+  });
+  const [editMode, setEditMode] = useState(false);
+  const year = viewMonth.getFullYear();
+  const month = viewMonth.getMonth();
+  const firstDay = new Date(year, month, 1);
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const leading = (firstDay.getDay() + 6) % 7;
+  const cells = [];
+  for (let i = 0; i < leading; i++) cells.push(null);
+  for (let d = 1; d <= daysInMonth; d++) cells.push(d);
+  const today = todayKey();
+
+  return (
+    <div style={{ padding: "12px 16px 90px" }}>
+      <button
+        style={{ ...S.routineBtn, marginBottom: 12, background: editMode ? "#4E6B57" : "#EAF1EC" }}
+        onClick={() => setEditMode(!editMode)}
+      >
+        {editMode ? <Check size={13} color="#fff" /> : <Pencil size={13} color="#4E6B57" />}
+        <span style={{ fontSize: 12.5, color: editMode ? "#fff" : "#4E6B57", fontWeight: 500 }}>
+          {editMode ? "Terminé" : "Modifier"}
+        </span>
+      </button>
+      <p style={{ fontSize: 13, color: "#9B998F", marginBottom: 10, marginTop: 0 }}>
+        {editMode ? "Appuyez sur un jour pour changer sa couleur." : "Calendrier verrouillé — appuyez sur \"Modifier\" pour changer les couleurs."}
+      </p>
+
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginBottom: 6 }}>
+        {GARDE_OPTIONS.map((o) => (
+          <span key={o.id} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12, color: "#5A5A52" }}>
+            <span style={{ width: 10, height: 10, borderRadius: 999, background: o.color, display: "inline-block" }} />
+            {o.label}
+          </span>
+        ))}
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12, color: "#5A5A52", marginBottom: 16 }}>
+        <span style={{ width: 6, height: 6, borderRadius: 999, background: "#7F77DD", display: "inline-block" }} />
+        Vacances scolaires (zone A)
+      </div>
+
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+        <button style={S.iconBtnSm} onClick={() => setViewMonth(new Date(year, month - 1, 1))} aria-label="Mois précédent">
+          <ChevronLeft size={16} color="#5A5A52" />
+        </button>
+        <p style={{ fontSize: 14.5, fontWeight: 600, color: "#2B2B26", margin: 0, textTransform: "capitalize" }}>
+          {MOIS[month]} {year}
+        </p>
+        <button style={S.iconBtnSm} onClick={() => setViewMonth(new Date(year, month + 1, 1))} aria-label="Mois suivant">
+          <ChevronRight size={16} color="#5A5A52" />
+        </button>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 4, marginBottom: 6 }}>
+        {JOURS_SEMAINE_COURT.map((j, i) => (
+          <div key={i} style={{ textAlign: "center", fontSize: 11, color: "#B0AEA3" }}>
+            {j}
+          </div>
+        ))}
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 4 }}>
+        {cells.map((d, i) => {
+          if (d === null) return <div key={i} />;
+          const dateKey = fmtKey(new Date(year, month, d));
+          const val = garde[dateKey];
+          const opt = GARDE_OPTIONS.find((o) => o.id === val);
+          const isToday = dateKey === today;
+          const holiday = isSchoolHoliday(dateKey);
+          return (
+            <button
+              key={i}
+              onClick={() => editMode && updateGarde(dateKey, cycleGarde(val))}
+              style={{
+                aspectRatio: "1",
+                borderRadius: 999,
+                border: isToday ? "2px solid #4E6B57" : "1px solid #EAE8DF",
+                background: opt ? opt.color : "#EFEDE4",
+                color: opt ? "#fff" : "#5A5A52",
+                fontSize: 13,
+                fontWeight: isToday ? 700 : 500,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                cursor: editMode ? "pointer" : "default",
+              }}
+            >
+              <span style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
+                <span>{d}</span>
+                {holiday && (
+                  <span style={{ width: 4, height: 4, borderRadius: 999, background: opt ? "rgba(255,255,255,0.85)" : "#7F77DD" }} />
+                )}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function TodoTab({ todos, addTodo, toggleTodo, deleteTodo }) {
+  const [text, setText] = useState("");
+
+  function submit(e) {
+    e.preventDefault();
+    if (!text.trim()) return;
+    addTodo(text);
+    setText("");
+  }
+
+  const pending = todos.filter((t) => !t.done);
+  const done = todos.filter((t) => t.done);
+
+  return (
+    <div style={{ padding: "12px 16px 90px" }}>
+      <form onSubmit={submit} style={S.addItemRow}>
+        <input style={{ ...S.input, flex: 1 }} placeholder="Ajouter une tâche…" value={text} onChange={(e) => setText(e.target.value)} />
+        <button type="submit" style={S.addBtnSm} aria-label="Ajouter">
+          <Plus size={16} color="#fff" />
+        </button>
+      </form>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 12 }}>
+        {pending.map((t) => (
+          <div key={t.id} style={S.shopItem}>
+            <button style={S.checkCircle} onClick={() => toggleTodo(t.id)} aria-label="Marquer comme terminée" />
+            <p style={{ flex: 1, fontSize: 14, color: "#2B2B26", margin: 0 }}>{t.text}</p>
+            <button style={S.iconBtnSm} onClick={() => deleteTodo(t.id)} title="Supprimer">
+              <Trash2 size={13} color="#B85C4A" />
+            </button>
+          </div>
+        ))}
+
+        {done.length > 0 && (
+          <>
+            <p style={{ fontSize: 12, color: "#9B998F", marginTop: 10, marginBottom: 0 }}>Terminées</p>
+            {done.map((t) => (
+              <div key={t.id} style={{ ...S.shopItem, opacity: 0.55 }}>
+                <button style={{ ...S.checkCircle, ...S.checkCircleDone }} onClick={() => toggleTodo(t.id)} aria-label="Marquer comme à faire">
+                  <Check size={13} color="#fff" />
+                </button>
+                <p style={{ flex: 1, fontSize: 14, color: "#2B2B26", margin: 0, textDecoration: "line-through" }}>{t.text}</p>
+                <button style={S.iconBtnSm} onClick={() => deleteTodo(t.id)} title="Supprimer">
+                  <Trash2 size={13} color="#B85C4A" />
+                </button>
+              </div>
+            ))}
+          </>
+        )}
+
+        {todos.length === 0 && <p style={{ color: "#9B998F", fontSize: 14, textAlign: "center", marginTop: 24 }}>Aucune tâche pour l'instant.</p>}
       </div>
     </div>
   );
@@ -881,6 +1109,16 @@ function CoursesTab({ shoppingList, toggleBought, addExtraItem, removeExtraItems
 }
 
 function RecipeModal({ editing, setEditing, onClose, onSave, updateIngredient, addIngredientRow, removeIngredientRow }) {
+  const inputRefs = useRef([]);
+  const prevLen = useRef(editing.ingredients.length);
+
+  useEffect(() => {
+    if (editing.ingredients.length > prevLen.current) {
+      inputRefs.current[editing.ingredients.length - 1]?.focus();
+    }
+    prevLen.current = editing.ingredients.length;
+  }, [editing.ingredients.length]);
+
   return (
     <div style={S.modalOverlay} onClick={onClose}>
       <div style={S.modal} onClick={(e) => e.stopPropagation()}>
@@ -910,7 +1148,19 @@ function RecipeModal({ editing, setEditing, onClose, onSave, updateIngredient, a
           <label style={{ ...S.label, marginTop: 16 }}>Ingrédients</label>
           {editing.ingredients.map((ing, idx) => (
             <div key={ing.id} style={S.ingredientRow}>
-              <input style={{ ...S.input, flex: 2 }} placeholder="Nom" value={ing.name} onChange={(e) => updateIngredient(idx, "name", e.target.value)} />
+              <input
+                ref={(el) => (inputRefs.current[idx] = el)}
+                style={{ ...S.input, flex: 2 }}
+                placeholder="Nom"
+                value={ing.name}
+                onChange={(e) => updateIngredient(idx, "name", e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    addIngredientRow();
+                  }
+                }}
+              />
               <input
                 style={{ ...S.input, flex: 1 }}
                 placeholder="Qté"

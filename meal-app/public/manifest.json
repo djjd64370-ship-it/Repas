@@ -1,7 +1,7 @@
 {
-  "name": "Repas",
-  "short_name": "Repas",
-  "description": "Recettes, planning et courses",
+  "name": "Lar Duarte",
+  "short_name": "Lar Duarte",
+  "description": "Repas, planning, garde et to-do",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#FBFAF6",
