@@ -217,6 +217,7 @@ function MealApp({ user }) {
   const [planning, setPlanning] = useState(null);
   const [routine, setRoutine] = useState(null);
   const [bought, setBought] = useState(null);
+  const [assignedTo, setAssignedTo] = useState(null);
   const [extraItems, setExtraItems] = useState(null);
   const [garde, setGarde] = useState(null);
   const [todos, setTodos] = useState(null);
@@ -236,6 +237,7 @@ function MealApp({ user }) {
       const p = data.planning || {};
       const rt = data.routine || {};
       const bt = data.bought || {};
+      const at = data.assignedTo || {};
       const ex = data.extraItems || [];
       const gd = data.garde || {};
       const td = data.todos || [];
@@ -268,6 +270,7 @@ function MealApp({ user }) {
       setPlanning(p);
       setRoutine(rt);
       setBought(bt);
+      setAssignedTo(at);
       setExtraItems(ex);
       setGarde(gd);
       setTodos(td);
@@ -300,6 +303,18 @@ function MealApp({ user }) {
     if (next[itemKey]) delete next[itemKey];
     else next[itemKey] = true;
     saveBought(next);
+  }
+  function saveAssignedTo(at) {
+    setAssignedTo(at);
+    save("assignedTo", at);
+  }
+  function cycleAssignee(itemKey) {
+    const current = assignedTo[itemKey] || null;
+    const next = current === null ? "C" : current === "C" ? "J" : null;
+    const nextMap = { ...assignedTo };
+    if (next === null) delete nextMap[itemKey];
+    else nextMap[itemKey] = next;
+    saveAssignedTo(nextMap);
   }
   function saveExtraItems(ex) {
     setExtraItems(ex);
@@ -482,17 +497,9 @@ function MealApp({ user }) {
       `}</style>
 
       <header style={S.header}>
-        <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <Home size={20} color="#4E6B57" />
-            <span style={S.headerTitle}>Lar Duarte</span>
-          </span>
-          {tab === "repas" && (
-            <button style={S.routineBtn} onClick={() => setTab("recettes")}>
-              <ChefHat size={14} color="#4E6B57" />
-              <span style={{ fontSize: 12.5, color: "#4E6B57", fontWeight: 500 }}>Recettes</span>
-            </button>
-          )}
+        <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <Home size={20} color="#4E6B57" />
+          <span style={S.headerTitle}>Lar Duarte</span>
         </span>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           {tab === "repas" && (
@@ -520,10 +527,25 @@ function MealApp({ user }) {
           />
         )}
         {tab === "repas" && (
-          <PlanningTab next7={next7} recipes={recipes} planning={planning} routine={routine} updateOverride={updateOverride} resetOverride={resetOverride} />
+          <PlanningTab
+            next7={next7}
+            recipes={recipes}
+            planning={planning}
+            routine={routine}
+            updateOverride={updateOverride}
+            resetOverride={resetOverride}
+            onOpenRecettes={() => setTab("recettes")}
+          />
         )}
         {tab === "courses" && (
-          <CoursesTab shoppingList={shoppingList} toggleBought={toggleBought} addExtraItem={addExtraItem} removeExtraItems={removeExtraItems} />
+          <CoursesTab
+            shoppingList={shoppingList}
+            toggleBought={toggleBought}
+            addExtraItem={addExtraItem}
+            removeExtraItems={removeExtraItems}
+            assignedTo={assignedTo}
+            cycleAssignee={cycleAssignee}
+          />
         )}
         {tab === "calendrier" && <CalendrierTab garde={garde} updateGarde={updateGarde} />}
         {tab === "todo" && <TodoTab todos={todos} addTodo={addTodo} toggleTodo={toggleTodo} deleteTodo={deleteTodo} />}
@@ -615,11 +637,14 @@ function RecettesTab({ search, setSearch, filteredRecipes, openNewRecipe, openEd
   );
 }
 
-function PlanningTab({ next7, recipes, planning, routine, updateOverride, resetOverride }) {
+function PlanningTab({ next7, recipes, planning, routine, updateOverride, resetOverride, onOpenRecettes }) {
   const [expanded, setExpanded] = useState({});
   return (
     <div style={{ padding: "12px 16px 90px" }}>
-      <p style={{ fontSize: 13, color: "#9B998F", marginBottom: 12 }}>Planning des 7 prochains jours — basé sur votre routine, modifiable jour par jour.</p>
+      <button style={{ ...S.routineBtn, marginBottom: 12 }} onClick={onOpenRecettes}>
+        <ChefHat size={13} color="#4E6B57" />
+        <span style={{ fontSize: 12.5, color: "#4E6B57", fontWeight: 500 }}>Recettes</span>
+      </button>
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
         {next7.map((d) => {
           const dateKey = fmtKey(d);
@@ -1029,7 +1054,7 @@ function RoutineModal({ recipes, routine, updateRoutineSlot, onClose }) {
   );
 }
 
-function CoursesTab({ shoppingList, toggleBought, addExtraItem, removeExtraItems }) {
+function CoursesTab({ shoppingList, toggleBought, addExtraItem, removeExtraItems, assignedTo, cycleAssignee }) {
   const [name, setName] = useState("");
   const [qty, setQty] = useState("");
   const [unit, setUnit] = useState("pièce(s)");
@@ -1095,6 +1120,17 @@ function CoursesTab({ shoppingList, toggleBought, addExtraItem, removeExtraItems
                   ))}
                 </div>
               </div>
+              <button
+                style={{
+                  ...S.assigneeCircle,
+                  ...(assignedTo[item.itemKey] === "C" ? { background: "#EC7FB0", borderColor: "#EC7FB0" } : {}),
+                  ...(assignedTo[item.itemKey] === "J" ? { background: "#5AC8E8", borderColor: "#5AC8E8" } : {}),
+                }}
+                onClick={() => cycleAssignee(item.itemKey)}
+                aria-label="Qui doit acheter ce produit"
+              >
+                {assignedTo[item.itemKey] || <span style={{ color: "#DAD8CE" }}>?</span>}
+              </button>
               {item.manualIds.length > 0 && (
                 <button style={S.iconBtnSm} onClick={() => removeExtraItems(item.manualIds)} title="Retirer cet article">
                   <Trash2 size={13} color="#B85C4A" />
@@ -1258,6 +1294,21 @@ const S = {
     marginTop: 1,
   },
   checkCircleDone: { background: "#4E6B57", borderColor: "#4E6B57" },
+  assigneeCircle: {
+    width: 22,
+    height: 22,
+    borderRadius: 999,
+    border: "1.5px solid #C9C7BC",
+    background: "#fff",
+    color: "#fff",
+    fontSize: 11,
+    fontWeight: 700,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    flexShrink: 0,
+    marginTop: 1,
+  },
   addDishBtn: { width: 24, height: 24, borderRadius: 999, border: "1px solid #CFE0D4", background: "#EAF1EC", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 },
   dayBadge: { fontSize: 11, color: "#4E6B57", background: "#EAF1EC", borderRadius: 5, padding: "2px 7px" },
   dayBadgeManual: { fontSize: 11, color: "#8A6A3C", background: "#F5EBDA", borderRadius: 5, padding: "2px 7px" },
