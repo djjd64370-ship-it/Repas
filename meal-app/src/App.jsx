@@ -11,7 +11,7 @@ import {
   createUserWithEmailAndPassword,
   signOut,
 } from "firebase/auth";
-import { doc, onSnapshot, setDoc } from "firebase/firestore";
+import { doc, onSnapshot, setDoc, updateDoc, deleteField } from "firebase/firestore";
 
 const UNITS = ["g", "kg", "ml", "l", "pièce(s)", "c. à soupe", "c. à café", "pincée"];
 const JOURS = ["Dimanche", "Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi"];
@@ -226,6 +226,14 @@ function MealApp({ user }) {
   const [editing, setEditing] = useState(null);
   const [routineOpen, setRoutineOpen] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
+
+  // Force un nouveau calcul de la liste de courses chaque minute, pour que les articles
+  // achetés depuis plus de 24h réapparaissent tout seuls même si rien d'autre ne change.
+  useEffect(() => {
+    const interval = setInterval(() => setNow(Date.now()), 60000);
+    return () => clearInterval(interval);
+  }, []);
   const autoUpdateDone = useRef(false);
 
   // Synchronisation en temps réel avec Firestore (fonctionne depuis n'importe quel appareil connecté au même compte)
@@ -282,6 +290,13 @@ function MealApp({ user }) {
   function save(field, value) {
     setDoc(doc(db, "mealApp", user.uid), { [field]: value }, { merge: true }).catch(() => {});
   }
+  // setDoc({merge:true}) fusionne les objets imbriqués en profondeur : une clé simplement
+  // omise n'est jamais réellement supprimée côté serveur. Pour effacer une valeur (ex :
+  // une couleur de garde, un "acheté"), il faut cibler précisément ce chemin avec deleteField().
+  function deleteNestedField(path) {
+    updateDoc(doc(db, "mealApp", user.uid), { [path]: deleteField() }).catch(() => {});
+  }
+
   function saveRecipes(r) {
     setRecipes(r);
     save("recipes", r);
@@ -298,11 +313,15 @@ function MealApp({ user }) {
     setBought(bt);
     save("bought", bt);
   }
-  function toggleBought(itemKey) {
-    const next = { ...bought };
-    if (next[itemKey]) delete next[itemKey];
-    else next[itemKey] = true;
-    saveBought(next);
+  function toggleBought(itemKey, isCurrentlyVisibleBought, sourceIds) {
+    if (isCurrentlyVisibleBought) {
+      const next = { ...bought };
+      delete next[itemKey];
+      setBought(next);
+      deleteNestedField(`bought.${itemKey}`);
+    } else {
+      saveBought({ ...bought, [itemKey]: { at: Date.now(), sources: sourceIds } });
+    }
   }
   function saveAssignedTo(at) {
     setAssignedTo(at);
@@ -311,10 +330,14 @@ function MealApp({ user }) {
   function cycleAssignee(itemKey) {
     const current = assignedTo[itemKey] || null;
     const next = current === null ? "C" : current === "C" ? "J" : null;
-    const nextMap = { ...assignedTo };
-    if (next === null) delete nextMap[itemKey];
-    else nextMap[itemKey] = next;
-    saveAssignedTo(nextMap);
+    if (next === null) {
+      const nextMap = { ...assignedTo };
+      delete nextMap[itemKey];
+      setAssignedTo(nextMap);
+      deleteNestedField(`assignedTo.${itemKey}`);
+    } else {
+      saveAssignedTo({ ...assignedTo, [itemKey]: next });
+    }
   }
   function saveExtraItems(ex) {
     setExtraItems(ex);
@@ -332,10 +355,14 @@ function MealApp({ user }) {
     save("garde", g);
   }
   function updateGarde(dateKey, nextVal) {
-    const next = { ...garde };
-    if (nextVal === null) delete next[dateKey];
-    else next[dateKey] = nextVal;
-    saveGarde(next);
+    if (nextVal === null) {
+      const next = { ...garde };
+      delete next[dateKey];
+      setGarde(next);
+      deleteNestedField(`garde.${dateKey}`);
+    } else {
+      saveGarde({ ...garde, [dateKey]: nextVal });
+    }
   }
   function saveTodos(t) {
     setTodos(t);
@@ -350,6 +377,16 @@ function MealApp({ user }) {
   }
   function deleteTodo(id) {
     saveTodos(todos.filter((t) => t.id !== id));
+  }
+  function cycleTodoAssignee(id) {
+    saveTodos(
+      todos.map((t) => {
+        if (t.id !== id) return t;
+        const current = t.assignee || null;
+        const next = current === null ? "C" : current === "C" ? "J" : null;
+        return { ...t, assignee: next };
+      })
+    );
   }
 
   function openNewRecipe() {
@@ -403,10 +440,8 @@ function MealApp({ user }) {
   function resetOverride(dateKey, meal) {
     const day = { ...(planning[dateKey] || {}) };
     delete day[meal];
-    const next = { ...planning };
-    if (Object.keys(day).length === 0) delete next[dateKey];
-    else next[dateKey] = day;
-    savePlanning(next);
+    setPlanning({ ...planning, [dateKey]: day });
+    deleteNestedField(`planning.${dateKey}.${meal}`);
   }
 
   // --- Routine (par jour de semaine) ---
@@ -451,11 +486,12 @@ function MealApp({ user }) {
           const key = ing.name.trim().toLowerCase() + "|" + (ing.unit || "");
           const qty = parseFloat(ing.qty) || 0;
           if (!shoppingMap.has(key)) {
-            shoppingMap.set(key, { name: ing.name.trim(), unit: ing.unit, qty: 0, days: [], manualIds: [] });
+            shoppingMap.set(key, { name: ing.name.trim(), unit: ing.unit, qty: 0, days: [], manualIds: [], sourceIds: [] });
           }
           const entry = shoppingMap.get(key);
           entry.qty += qty;
           if (!entry.days.some((x) => x.dateKey === dateKey)) entry.days.push({ dateKey, label });
+          if (!entry.sourceIds.includes(rid)) entry.sourceIds.push(rid);
         });
       });
     });
@@ -465,22 +501,29 @@ function MealApp({ user }) {
     const key = item.name.trim().toLowerCase() + "|" + (item.unit || "");
     const qty = parseFloat(item.qty) || 0;
     if (!shoppingMap.has(key)) {
-      shoppingMap.set(key, { name: item.name.trim(), unit: item.unit, qty: 0, days: [], manualIds: [] });
+      shoppingMap.set(key, { name: item.name.trim(), unit: item.unit, qty: 0, days: [], manualIds: [], sourceIds: [] });
     }
     const entry = shoppingMap.get(key);
     entry.qty += qty;
     entry.manualIds.push(item.id);
+    if (!entry.sourceIds.includes("extra:" + item.id)) entry.sourceIds.push("extra:" + item.id);
     if (!entry.days.some((x) => x.dateKey === "0000-00-00")) entry.days.push({ dateKey: "0000-00-00", label: "Achat libre" });
   });
   const shoppingList = Array.from(shoppingMap.entries())
     .map(([key, item]) => {
       const sortedDays = item.days.sort((a, b) => (a.dateKey < b.dateKey ? -1 : 1));
-      const earliest = sortedDays[0].dateKey;
-      const itemKey = key + "|" + earliest;
-      return { ...item, days: sortedDays, itemKey, isBought: !!bought[itemKey] };
+      const itemKey = key; // clé stable (nom+unité) : ne dépend pas de la date, qui peut changer si les repas sont modifiés
+      const record = bought[itemKey]; // { at, sources } ou undefined
+      const hasNewSource = !!record && item.sourceIds.some((id) => !(record.sources || []).includes(id));
+      let status = "normal"; // normal | grisé (acheté <24h) | caché (acheté >=24h, aucune nouvelle source)
+      if (record && !hasNewSource) {
+        status = now - record.at < 24 * 60 * 60 * 1000 ? "bought" : "hidden";
+      }
+      return { ...item, days: sortedDays, itemKey, status };
     })
+    .filter((item) => item.status !== "hidden")
     .sort((a, b) => {
-      if (a.isBought !== b.isBought) return a.isBought ? 1 : -1;
+      if ((a.status === "bought") !== (b.status === "bought")) return a.status === "bought" ? 1 : -1;
       const da = a.days[0].dateKey;
       const db_ = b.days[0].dateKey;
       if (da !== db_) return da < db_ ? -1 : 1;
@@ -548,7 +591,7 @@ function MealApp({ user }) {
           />
         )}
         {tab === "calendrier" && <CalendrierTab garde={garde} updateGarde={updateGarde} />}
-        {tab === "todo" && <TodoTab todos={todos} addTodo={addTodo} toggleTodo={toggleTodo} deleteTodo={deleteTodo} />}
+        {tab === "todo" && <TodoTab todos={todos} addTodo={addTodo} toggleTodo={toggleTodo} deleteTodo={deleteTodo} cycleTodoAssignee={cycleTodoAssignee} />}
       </main>
 
       <nav style={S.nav}>
@@ -856,8 +899,9 @@ function CalendrierTab({ garde, updateGarde }) {
   );
 }
 
-function TodoTab({ todos, addTodo, toggleTodo, deleteTodo }) {
+function TodoTab({ todos, addTodo, toggleTodo, deleteTodo, cycleTodoAssignee }) {
   const [text, setText] = useState("");
+  const [editMode, setEditMode] = useState(false);
 
   function submit(e) {
     e.preventDefault();
@@ -869,8 +913,45 @@ function TodoTab({ todos, addTodo, toggleTodo, deleteTodo }) {
   const pending = todos.filter((t) => !t.done);
   const done = todos.filter((t) => t.done);
 
+  function TodoRow({ t }) {
+    return (
+      <div style={{ ...S.shopItem, opacity: t.done ? 0.55 : 1 }}>
+        <button style={S.iconBtnSm} onClick={() => editMode && deleteTodo(t.id)} title="Supprimer" disabled={!editMode}>
+          <Trash2 size={13} color={editMode ? "#B85C4A" : "#DAD8CE"} />
+        </button>
+        <button
+          style={{
+            ...S.assigneeCircle,
+            ...(t.assignee === "C" ? { background: "#EC7FB0", borderColor: "#EC7FB0" } : {}),
+            ...(t.assignee === "J" ? { background: "#5AC8E8", borderColor: "#5AC8E8" } : {}),
+          }}
+          onClick={() => editMode && cycleTodoAssignee(t.id)}
+          aria-label="Qui doit s'en occuper"
+        >
+          {t.assignee || <span style={{ color: "#DAD8CE" }}>?</span>}
+        </button>
+        <p style={{ flex: 1, fontSize: 14, color: "#2B2B26", margin: 0, textDecoration: t.done ? "line-through" : "none" }}>{t.text}</p>
+        <button
+          style={{ ...S.checkCircle, ...(t.done ? S.checkCircleDone : {}) }}
+          onClick={() => editMode && toggleTodo(t.id)}
+          aria-label={t.done ? "Marquer comme à faire" : "Marquer comme terminée"}
+        >
+          {t.done && <Check size={13} color="#fff" />}
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div style={{ padding: "12px 16px 90px" }}>
+      <button
+        style={{ ...S.routineBtn, marginBottom: 12, background: editMode ? "#4E6B57" : "#EAF1EC" }}
+        onClick={() => setEditMode(!editMode)}
+      >
+        {editMode ? <Check size={13} color="#fff" /> : <Pencil size={13} color="#4E6B57" />}
+        <span style={{ fontSize: 12.5, color: editMode ? "#fff" : "#4E6B57", fontWeight: 500 }}>{editMode ? "Terminé" : "Modifier"}</span>
+      </button>
+
       <form onSubmit={submit} style={S.addItemRow}>
         <input style={{ ...S.input, flex: 1 }} placeholder="Ajouter une tâche…" value={text} onChange={(e) => setText(e.target.value)} />
         <button type="submit" style={S.addBtnSm} aria-label="Ajouter">
@@ -880,28 +961,14 @@ function TodoTab({ todos, addTodo, toggleTodo, deleteTodo }) {
 
       <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 12 }}>
         {pending.map((t) => (
-          <div key={t.id} style={S.shopItem}>
-            <button style={S.checkCircle} onClick={() => toggleTodo(t.id)} aria-label="Marquer comme terminée" />
-            <p style={{ flex: 1, fontSize: 14, color: "#2B2B26", margin: 0 }}>{t.text}</p>
-            <button style={S.iconBtnSm} onClick={() => deleteTodo(t.id)} title="Supprimer">
-              <Trash2 size={13} color="#B85C4A" />
-            </button>
-          </div>
+          <TodoRow key={t.id} t={t} />
         ))}
 
         {done.length > 0 && (
           <>
             <p style={{ fontSize: 12, color: "#9B998F", marginTop: 10, marginBottom: 0 }}>Terminées</p>
             {done.map((t) => (
-              <div key={t.id} style={{ ...S.shopItem, opacity: 0.55 }}>
-                <button style={{ ...S.checkCircle, ...S.checkCircleDone }} onClick={() => toggleTodo(t.id)} aria-label="Marquer comme à faire">
-                  <Check size={13} color="#fff" />
-                </button>
-                <p style={{ flex: 1, fontSize: 14, color: "#2B2B26", margin: 0, textDecoration: "line-through" }}>{t.text}</p>
-                <button style={S.iconBtnSm} onClick={() => deleteTodo(t.id)} title="Supprimer">
-                  <Trash2 size={13} color="#B85C4A" />
-                </button>
-              </div>
+              <TodoRow key={t.id} t={t} />
             ))}
           </>
         )}
@@ -1058,7 +1125,7 @@ function CoursesTab({ shoppingList, toggleBought, addExtraItem, removeExtraItems
   const [name, setName] = useState("");
   const [qty, setQty] = useState("");
   const [unit, setUnit] = useState("pièce(s)");
-  const remaining = shoppingList.filter((i) => !i.isBought).length;
+  const remaining = shoppingList.filter((i) => i.status !== "bought").length;
 
   function submit(e) {
     e.preventDefault();
@@ -1094,16 +1161,25 @@ function CoursesTab({ shoppingList, toggleBought, addExtraItem, removeExtraItems
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 12 }}>
           {shoppingList.map((item) => (
-            <div key={item.itemKey} style={{ ...S.shopItem, opacity: item.isBought ? 0.55 : 1 }}>
+            <div key={item.itemKey} style={{ ...S.shopItem, opacity: item.status === "bought" ? 0.55 : 1 }}>
+              {item.manualIds.length > 0 && (
+                <button style={S.iconBtnSm} onClick={() => removeExtraItems(item.manualIds)} title="Retirer cet article">
+                  <Trash2 size={13} color="#B85C4A" />
+                </button>
+              )}
               <button
-                style={{ ...S.checkCircle, ...(item.isBought ? S.checkCircleDone : {}) }}
-                onClick={() => toggleBought(item.itemKey)}
-                aria-label={item.isBought ? "Marquer comme non acheté" : "Marquer comme acheté"}
+                style={{
+                  ...S.assigneeCircle,
+                  ...(assignedTo[item.itemKey] === "C" ? { background: "#EC7FB0", borderColor: "#EC7FB0" } : {}),
+                  ...(assignedTo[item.itemKey] === "J" ? { background: "#5AC8E8", borderColor: "#5AC8E8" } : {}),
+                }}
+                onClick={() => cycleAssignee(item.itemKey)}
+                aria-label="Qui doit acheter ce produit"
               >
-                {item.isBought && <Check size={13} color="#fff" />}
+                {assignedTo[item.itemKey] || <span style={{ color: "#DAD8CE" }}>?</span>}
               </button>
               <div style={{ flex: 1 }}>
-                <p style={{ fontSize: 14, color: "#2B2B26", margin: 0, textDecoration: item.isBought ? "line-through" : "none" }}>
+                <p style={{ fontSize: 14, color: "#2B2B26", margin: 0, textDecoration: item.status === "bought" ? "line-through" : "none" }}>
                   {item.name}
                   {item.qty > 0 && (
                     <span style={{ color: "#9B998F" }}>
@@ -1121,21 +1197,12 @@ function CoursesTab({ shoppingList, toggleBought, addExtraItem, removeExtraItems
                 </div>
               </div>
               <button
-                style={{
-                  ...S.assigneeCircle,
-                  ...(assignedTo[item.itemKey] === "C" ? { background: "#EC7FB0", borderColor: "#EC7FB0" } : {}),
-                  ...(assignedTo[item.itemKey] === "J" ? { background: "#5AC8E8", borderColor: "#5AC8E8" } : {}),
-                }}
-                onClick={() => cycleAssignee(item.itemKey)}
-                aria-label="Qui doit acheter ce produit"
+                style={{ ...S.checkCircle, ...(item.status === "bought" ? S.checkCircleDone : {}) }}
+                onClick={() => toggleBought(item.itemKey, item.status === "bought", item.sourceIds)}
+                aria-label={item.status === "bought" ? "Marquer comme non acheté" : "Marquer comme acheté"}
               >
-                {assignedTo[item.itemKey] || <span style={{ color: "#DAD8CE" }}>?</span>}
+                {item.status === "bought" && <Check size={13} color="#fff" />}
               </button>
-              {item.manualIds.length > 0 && (
-                <button style={S.iconBtnSm} onClick={() => removeExtraItems(item.manualIds)} title="Retirer cet article">
-                  <Trash2 size={13} color="#B85C4A" />
-                </button>
-              )}
             </div>
           ))}
         </div>
