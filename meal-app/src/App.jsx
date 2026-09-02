@@ -388,6 +388,10 @@ function MealApp({ user }) {
       })
     );
   }
+  function editTodoText(id, newText) {
+    if (!newText.trim()) return;
+    saveTodos(todos.map((t) => (t.id === id ? { ...t, text: newText.trim() } : t)));
+  }
 
   function openNewRecipe() {
     setEditing(emptyRecipe());
@@ -591,7 +595,16 @@ function MealApp({ user }) {
           />
         )}
         {tab === "calendrier" && <CalendrierTab garde={garde} updateGarde={updateGarde} />}
-        {tab === "todo" && <TodoTab todos={todos} addTodo={addTodo} toggleTodo={toggleTodo} deleteTodo={deleteTodo} cycleTodoAssignee={cycleTodoAssignee} />}
+        {tab === "todo" && (
+          <TodoTab
+            todos={todos}
+            addTodo={addTodo}
+            toggleTodo={toggleTodo}
+            deleteTodo={deleteTodo}
+            cycleTodoAssignee={cycleTodoAssignee}
+            editTodoText={editTodoText}
+          />
+        )}
       </main>
 
       <nav style={S.nav}>
@@ -899,9 +912,10 @@ function CalendrierTab({ garde, updateGarde }) {
   );
 }
 
-function TodoTab({ todos, addTodo, toggleTodo, deleteTodo, cycleTodoAssignee }) {
+function TodoTab({ todos, addTodo, toggleTodo, deleteTodo, cycleTodoAssignee, editTodoText }) {
   const [text, setText] = useState("");
-  const [editMode, setEditMode] = useState(false);
+  const [editingId, setEditingId] = useState(null);
+  const [draft, setDraft] = useState("");
 
   function submit(e) {
     e.preventDefault();
@@ -909,49 +923,20 @@ function TodoTab({ todos, addTodo, toggleTodo, deleteTodo, cycleTodoAssignee }) 
     addTodo(text);
     setText("");
   }
+  function startEdit(t) {
+    setEditingId(t.id);
+    setDraft(t.text);
+  }
+  function confirmEdit() {
+    editTodoText(editingId, draft);
+    setEditingId(null);
+  }
 
   const pending = todos.filter((t) => !t.done);
   const done = todos.filter((t) => t.done);
 
-  function TodoRow({ t }) {
-    return (
-      <div style={{ ...S.shopItem, opacity: t.done ? 0.55 : 1 }}>
-        <button style={S.iconBtnSm} onClick={() => editMode && deleteTodo(t.id)} title="Supprimer" disabled={!editMode}>
-          <Trash2 size={13} color={editMode ? "#B85C4A" : "#DAD8CE"} />
-        </button>
-        <button
-          style={{
-            ...S.assigneeCircle,
-            ...(t.assignee === "C" ? { background: "#EC7FB0", borderColor: "#EC7FB0" } : {}),
-            ...(t.assignee === "J" ? { background: "#5AC8E8", borderColor: "#5AC8E8" } : {}),
-          }}
-          onClick={() => editMode && cycleTodoAssignee(t.id)}
-          aria-label="Qui doit s'en occuper"
-        >
-          {t.assignee || <span style={{ color: "#DAD8CE" }}>?</span>}
-        </button>
-        <p style={{ flex: 1, fontSize: 14, color: "#2B2B26", margin: 0, textDecoration: t.done ? "line-through" : "none" }}>{t.text}</p>
-        <button
-          style={{ ...S.checkCircle, ...(t.done ? S.checkCircleDone : {}) }}
-          onClick={() => editMode && toggleTodo(t.id)}
-          aria-label={t.done ? "Marquer comme à faire" : "Marquer comme terminée"}
-        >
-          {t.done && <Check size={13} color="#fff" />}
-        </button>
-      </div>
-    );
-  }
-
   return (
     <div style={{ padding: "12px 16px 90px" }}>
-      <button
-        style={{ ...S.routineBtn, marginBottom: 12, background: editMode ? "#4E6B57" : "#EAF1EC" }}
-        onClick={() => setEditMode(!editMode)}
-      >
-        {editMode ? <Check size={13} color="#fff" /> : <Pencil size={13} color="#4E6B57" />}
-        <span style={{ fontSize: 12.5, color: editMode ? "#fff" : "#4E6B57", fontWeight: 500 }}>{editMode ? "Terminé" : "Modifier"}</span>
-      </button>
-
       <form onSubmit={submit} style={S.addItemRow}>
         <input style={{ ...S.input, flex: 1 }} placeholder="Ajouter une tâche…" value={text} onChange={(e) => setText(e.target.value)} />
         <button type="submit" style={S.addBtnSm} aria-label="Ajouter">
@@ -961,20 +946,92 @@ function TodoTab({ todos, addTodo, toggleTodo, deleteTodo, cycleTodoAssignee }) 
 
       <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 12 }}>
         {pending.map((t) => (
-          <TodoRow key={t.id} t={t} />
+          <TodoRow
+            key={t.id}
+            t={t}
+            isEditing={editingId === t.id}
+            draft={draft}
+            setDraft={setDraft}
+            onStartEdit={() => startEdit(t)}
+            onConfirmEdit={confirmEdit}
+            toggleTodo={toggleTodo}
+            deleteTodo={deleteTodo}
+            cycleTodoAssignee={cycleTodoAssignee}
+          />
         ))}
 
         {done.length > 0 && (
           <>
             <p style={{ fontSize: 12, color: "#9B998F", marginTop: 10, marginBottom: 0 }}>Terminées</p>
             {done.map((t) => (
-              <TodoRow key={t.id} t={t} />
+              <TodoRow
+                key={t.id}
+                t={t}
+                isEditing={editingId === t.id}
+                draft={draft}
+                setDraft={setDraft}
+                onStartEdit={() => startEdit(t)}
+                onConfirmEdit={confirmEdit}
+                toggleTodo={toggleTodo}
+                deleteTodo={deleteTodo}
+                cycleTodoAssignee={cycleTodoAssignee}
+              />
             ))}
           </>
         )}
 
         {todos.length === 0 && <p style={{ color: "#9B998F", fontSize: 14, textAlign: "center", marginTop: 24 }}>Aucune tâche pour l'instant.</p>}
       </div>
+    </div>
+  );
+}
+
+function TodoRow({ t, isEditing, draft, setDraft, onStartEdit, onConfirmEdit, toggleTodo, deleteTodo, cycleTodoAssignee }) {
+  return (
+    <div style={{ ...S.shopItem, opacity: t.done ? 0.55 : 1 }}>
+      <button style={S.iconBtnSm} onClick={() => deleteTodo(t.id)} title="Supprimer">
+        <Trash2 size={13} color="#B85C4A" />
+      </button>
+      <button
+        style={{
+          ...S.assigneeCircle,
+          ...(t.assignee === "C" ? { background: "#EC7FB0", borderColor: "#EC7FB0" } : {}),
+          ...(t.assignee === "J" ? { background: "#5AC8E8", borderColor: "#5AC8E8" } : {}),
+        }}
+        onClick={() => cycleTodoAssignee(t.id)}
+        aria-label="Qui doit s'en occuper"
+      >
+        {t.assignee || <span style={{ color: "#C9C7BC", fontSize: 8, letterSpacing: -0.3 }}>C/J</span>}
+      </button>
+
+      {isEditing ? (
+        <input
+          autoFocus
+          style={{ ...S.input, flex: 1, padding: "5px 8px" }}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              onConfirmEdit();
+            }
+          }}
+          onBlur={onConfirmEdit}
+        />
+      ) : (
+        <p style={{ flex: 1, fontSize: 14, color: "#2B2B26", margin: 0, textDecoration: t.done ? "line-through" : "none" }}>{t.text}</p>
+      )}
+
+      <button style={S.iconBtnSm} onClick={onStartEdit} title="Modifier le texte">
+        <Pencil size={13} color="#7A7A70" />
+      </button>
+      <button
+        style={{ ...S.checkCircle, ...(t.done ? S.checkCircleDone : {}) }}
+        onClick={() => toggleTodo(t.id)}
+        aria-label={t.done ? "Marquer comme à faire" : "Marquer comme terminée"}
+      >
+        {t.done && <Check size={13} color="#fff" />}
+      </button>
     </div>
   );
 }
@@ -1176,7 +1233,7 @@ function CoursesTab({ shoppingList, toggleBought, addExtraItem, removeExtraItems
                 onClick={() => cycleAssignee(item.itemKey)}
                 aria-label="Qui doit acheter ce produit"
               >
-                {assignedTo[item.itemKey] || <span style={{ color: "#DAD8CE" }}>?</span>}
+                {assignedTo[item.itemKey] || <span style={{ color: "#C9C7BC", fontSize: 8, letterSpacing: -0.3 }}>C/J</span>}
               </button>
               <div style={{ flex: 1 }}>
                 <p style={{ fontSize: 14, color: "#2B2B26", margin: 0, textDecoration: item.status === "bought" ? "line-through" : "none" }}>
