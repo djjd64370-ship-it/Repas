@@ -123,6 +123,7 @@ function cycleGarde(current) {
 const emptyRecipe = () => ({
   id: uid(),
   name: "",
+  link: "",
   lastCooked: null,
   ingredients: [{ id: uid(), name: "", qty: "1", unit: "pièce(s)" }],
 });
@@ -411,6 +412,7 @@ function MealApp({ user }) {
     const cleaned = {
       ...editing,
       name: editing.name.trim(),
+      link: (editing.link || "").trim(),
       ingredients: editing.ingredients.filter((i) => i.name.trim()),
     };
     const exists = recipes.some((r) => r.id === cleaned.id);
@@ -664,9 +666,21 @@ function RecettesTab({ search, setSearch, filteredRecipes, openNewRecipe, openEd
           const d = daysSince(r.lastCooked);
           return (
             <div key={r.id} style={S.recipeCard}>
-              <div style={S.recipeThumb}>
-                <span style={{ fontSize: 24 }}>{getRecipeEmoji(r.name)}</span>
-              </div>
+              {r.link ? (
+                <a
+                  href={r.link}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{ ...S.recipeThumb, textDecoration: "none", cursor: "pointer" }}
+                  title="Ouvrir la recette"
+                >
+                  <span style={{ fontSize: 24 }}>{getRecipeEmoji(r.name)}</span>
+                </a>
+              ) : (
+                <div style={S.recipeThumb}>
+                  <span style={{ fontSize: 24 }}>{getRecipeEmoji(r.name)}</span>
+                </div>
+              )}
               <div style={{ flex: 1, minWidth: 0 }}>
                 <p style={S.recipeName}>{r.name}</p>
                 <p style={S.recipeMeta}>
@@ -1303,6 +1317,15 @@ function RecipeModal({ editing, setEditing, onClose, onSave, updateIngredient, a
             placeholder="Ex : Poulet rôti aux légumes"
             value={editing.name}
             onChange={(e) => setEditing((prev) => ({ ...prev, name: e.target.value }))}
+          />
+
+          <label style={{ ...S.label, marginTop: 12 }}>Lien de la recette (optionnel)</label>
+          <input
+            style={S.input}
+            placeholder="https://…"
+            type="url"
+            value={editing.link || ""}
+            onChange={(e) => setEditing((prev) => ({ ...prev, link: e.target.value }))}
           />
 
           <label style={{ ...S.label, marginTop: 16 }}>Ingrédients</label>
