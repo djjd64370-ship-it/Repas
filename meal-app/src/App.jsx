@@ -1071,7 +1071,22 @@ function DishPicker({ recipes, selectedIds, onAdd, onRemove }) {
     <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
       {selected.map((r) => (
         <span key={r.id} style={S.chip}>
-          <span aria-hidden="true">{getRecipeEmoji(r.name)}</span> {r.name}
+          {r.link ? (
+            <a
+              href={r.link}
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-hidden="false"
+              title="Ouvrir la recette"
+              style={{ textDecoration: "none", color: "inherit", cursor: "pointer" }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              {getRecipeEmoji(r.name)}
+            </a>
+          ) : (
+            <span aria-hidden="true">{getRecipeEmoji(r.name)}</span>
+          )}{" "}
+          {r.name}
           <button style={S.chipX} onClick={() => onRemove(r.id)} aria-label={`Retirer ${r.name}`}>
             <X size={18} color="#4E6B57" />
           </button>
