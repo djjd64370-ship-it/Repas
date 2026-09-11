@@ -74,8 +74,12 @@ function uid() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 }
 function normalizeSlot(s) {
-  if (!s) return { hidden: false, recipeIds: [] };
-  return { hidden: !!s.hidden, recipeIds: s.recipeIds || (s.recipeId ? [s.recipeId] : []) };
+  if (!s) return { hidden: false, recipeIds: [], freezerIds: [] };
+  return {
+    hidden: !!s.hidden,
+    recipeIds: s.recipeIds || (s.recipeId ? [s.recipeId] : []),
+    freezerIds: s.freezerIds || [],
+  };
 }
 function getEffectiveSlot(dateKey, weekday, meal, planning, routine) {
   const override = planning[dateKey]?.[meal];
@@ -222,6 +226,7 @@ function MealApp({ user }) {
   const [extraItems, setExtraItems] = useState(null);
   const [garde, setGarde] = useState(null);
   const [todos, setTodos] = useState(null);
+  const [freezer, setFreezer] = useState(null);
   const [tab, setTab] = useState("repas");
   const [search, setSearch] = useState("");
   const [editing, setEditing] = useState(null);
@@ -250,6 +255,7 @@ function MealApp({ user }) {
       const ex = data.extraItems || [];
       const gd = data.garde || {};
       const td = data.todos || [];
+      const fz = data.freezer || [];
 
       if (!autoUpdateDone.current) {
         autoUpdateDone.current = true;
@@ -283,6 +289,7 @@ function MealApp({ user }) {
       setExtraItems(ex);
       setGarde(gd);
       setTodos(td);
+      setFreezer(fz);
       setLoaded(true);
     });
     return unsub;
@@ -450,6 +457,43 @@ function MealApp({ user }) {
     deleteNestedField(`planning.${dateKey}.${meal}`);
   }
 
+  // --- Congélateur ---
+  function saveFreezer(fz) {
+    setFreezer(fz);
+    save("freezer", fz);
+  }
+  function addFreezerItem({ name, date, qty, people }) {
+    if (!name.trim()) return;
+    saveFreezer([
+      ...freezer,
+      { id: uid(), name: name.trim(), date, qty: Math.max(1, parseInt(qty, 10) || 1), people: parseInt(people, 10) || 1 },
+    ]);
+  }
+  function deleteFreezerItem(id) {
+    saveFreezer(freezer.filter((f) => f.id !== id));
+  }
+  function sendFreezerItem(freezerId, dateKey, weekday, meal) {
+    const item = freezer.find((f) => f.id === freezerId);
+    if (!item || item.qty <= 0) return;
+    saveFreezer(freezer.map((f) => (f.id === freezerId ? { ...f, qty: f.qty - 1 } : f)));
+    const eff = getEffectiveSlot(dateKey, weekday, meal, planning, routine);
+    const merged = { ...eff, freezerIds: [...eff.freezerIds, freezerId] };
+    const day = { ...(planning[dateKey] || {}) };
+    day[meal] = merged;
+    savePlanning({ ...planning, [dateKey]: day });
+  }
+  function removeFreezerFromSlot(dateKey, weekday, meal, freezerId) {
+    const eff = getEffectiveSlot(dateKey, weekday, meal, planning, routine);
+    const merged = { ...eff, freezerIds: eff.freezerIds.filter((id) => id !== freezerId) };
+    const day = { ...(planning[dateKey] || {}) };
+    day[meal] = merged;
+    savePlanning({ ...planning, [dateKey]: day });
+    // Le plat repart au congélateur (si l'article existe encore)
+    if (freezer.some((f) => f.id === freezerId)) {
+      saveFreezer(freezer.map((f) => (f.id === freezerId ? { ...f, qty: f.qty + 1 } : f)));
+    }
+  }
+
   // --- Routine (par jour de semaine) ---
   function updateRoutineSlot(weekday, meal, patch) {
     const current = normalizeSlot(routine[weekday]?.[meal]);
@@ -584,7 +628,13 @@ function MealApp({ user }) {
             updateOverride={updateOverride}
             resetOverride={resetOverride}
             onOpenRecettes={() => setTab("recettes")}
+            onOpenCongelateur={() => setTab("congelateur")}
+            freezer={freezer}
+            removeFreezerFromSlot={removeFreezerFromSlot}
           />
+        )}
+        {tab === "congelateur" && (
+          <CongelateurTab next7={next7} freezer={freezer} addFreezerItem={addFreezerItem} deleteFreezerItem={deleteFreezerItem} sendFreezerItem={sendFreezerItem} />
         )}
         {tab === "courses" && (
           <CoursesTab
@@ -707,14 +757,20 @@ function RecettesTab({ search, setSearch, filteredRecipes, openNewRecipe, openEd
   );
 }
 
-function PlanningTab({ next7, recipes, planning, routine, updateOverride, resetOverride, onOpenRecettes }) {
+function PlanningTab({ next7, recipes, planning, routine, updateOverride, resetOverride, onOpenRecettes, onOpenCongelateur, freezer, removeFreezerFromSlot }) {
   const [expanded, setExpanded] = useState({});
   return (
     <div style={{ padding: "12px 16px 90px" }}>
-      <button style={{ ...S.routineBtn, marginBottom: 12 }} onClick={onOpenRecettes}>
-        <ChefHat size={13} color="#4E6B57" />
-        <span style={{ fontSize: 12.5, color: "#4E6B57", fontWeight: 500 }}>Recettes</span>
-      </button>
+      <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+        <button style={S.routineBtn} onClick={onOpenRecettes}>
+          <ChefHat size={13} color="#4E6B57" />
+          <span style={{ fontSize: 12.5, color: "#4E6B57", fontWeight: 500 }}>Recettes</span>
+        </button>
+        <button style={S.routineBtn} onClick={onOpenCongelateur}>
+          <span aria-hidden="true">❄️</span>
+          <span style={{ fontSize: 12.5, color: "#4E6B57", fontWeight: 500 }}>Congélateur</span>
+        </button>
+      </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
         {next7.map((d) => {
           const dateKey = fmtKey(d);
@@ -751,9 +807,12 @@ function PlanningTab({ next7, recipes, planning, routine, updateOverride, resetO
                 recipes={recipes}
                 hidden={midi.hidden}
                 recipeIds={midi.recipeIds}
+                freezerIds={midi.freezerIds}
+                freezer={freezer}
                 onToggleHidden={() => updateOverride(dateKey, weekday, "midi", { hidden: !midi.hidden })}
                 onAddDish={(id) => updateOverride(dateKey, weekday, "midi", { recipeIds: [...midi.recipeIds, id] })}
                 onRemoveDish={(id) => updateOverride(dateKey, weekday, "midi", { recipeIds: midi.recipeIds.filter((x) => x !== id) })}
+                onRemoveFreezerDish={(id) => removeFreezerFromSlot(dateKey, weekday, "midi", id)}
                 showReset={isOverrideMidi}
                 onReset={() => resetOverride(dateKey, "midi")}
               />
@@ -763,9 +822,12 @@ function PlanningTab({ next7, recipes, planning, routine, updateOverride, resetO
                 recipes={recipes}
                 hidden={soir.hidden}
                 recipeIds={soir.recipeIds}
+                freezerIds={soir.freezerIds}
+                freezer={freezer}
                 onToggleHidden={() => updateOverride(dateKey, weekday, "soir", { hidden: !soir.hidden })}
                 onAddDish={(id) => updateOverride(dateKey, weekday, "soir", { recipeIds: [...soir.recipeIds, id] })}
                 onRemoveDish={(id) => updateOverride(dateKey, weekday, "soir", { recipeIds: soir.recipeIds.filter((x) => x !== id) })}
+                onRemoveFreezerDish={(id) => removeFreezerFromSlot(dateKey, weekday, "soir", id)}
                 showReset={isOverrideSoir}
                 onReset={() => resetOverride(dateKey, "soir")}
               />
@@ -777,7 +839,7 @@ function PlanningTab({ next7, recipes, planning, routine, updateOverride, resetO
   );
 }
 
-function MealEditor({ icon, label, recipes, hidden, recipeIds, onToggleHidden, onAddDish, onRemoveDish, showReset, onReset }) {
+function MealEditor({ icon, label, recipes, hidden, recipeIds, freezerIds, freezer, onToggleHidden, onAddDish, onRemoveDish, onRemoveFreezerDish, showReset, onReset }) {
   if (hidden) {
     return (
       <div style={S.mealBlockHidden}>
@@ -817,6 +879,140 @@ function MealEditor({ icon, label, recipes, hidden, recipeIds, onToggleHidden, o
       </div>
       <div style={{ marginTop: 6 }}>
         <DishPicker recipes={recipes} selectedIds={recipeIds} onAdd={onAddDish} onRemove={onRemoveDish} />
+        {freezerIds.length > 0 && (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6 }}>
+            {freezerIds.map((fid) => {
+              const item = freezer.find((f) => f.id === fid);
+              if (!item) return null;
+              return (
+                <span key={fid} style={S.chip}>
+                  <span aria-hidden="true">❄️</span> {item.name}
+                  <button style={S.chipX} onClick={() => onRemoveFreezerDish(fid)} aria-label={`Retirer ${item.name}`}>
+                    <X size={18} color="#4E6B57" />
+                  </button>
+                </span>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function CongelateurTab({ next7, freezer, addFreezerItem, deleteFreezerItem, sendFreezerItem }) {
+  const [name, setName] = useState("");
+  const [date, setDate] = useState(todayKey());
+  const [qty, setQty] = useState("1");
+  const [people, setPeople] = useState("4");
+  const [sendingId, setSendingId] = useState(null);
+  const [sendDate, setSendDate] = useState(fmtKey(next7[0]));
+  const [sendMeal, setSendMeal] = useState("midi");
+
+  function submit(e) {
+    e.preventDefault();
+    if (!name.trim()) return;
+    addFreezerItem({ name, date, qty, people });
+    setName("");
+    setQty("1");
+    setPeople("4");
+    setDate(todayKey());
+  }
+
+  function openSend(item) {
+    setSendingId(item.id);
+    setSendDate(fmtKey(next7[0]));
+    setSendMeal("midi");
+  }
+  function confirmSend() {
+    const d = new Date(sendDate + "T00:00:00");
+    sendFreezerItem(sendingId, sendDate, d.getDay(), sendMeal);
+    setSendingId(null);
+  }
+
+  const available = freezer.filter((f) => f.qty > 0).sort((a, b) => (a.date < b.date ? -1 : 1));
+
+  return (
+    <div style={{ padding: "12px 16px 90px" }}>
+      <p style={{ fontSize: 13, color: "#9B998F", marginBottom: 12 }}>Plats préparés déjà congelés, prêts à être envoyés dans le planning.</p>
+
+      <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 16 }}>
+        <input style={S.input} placeholder="Nom du plat (ex : Lasagnes maison)" value={name} onChange={(e) => setName(e.target.value)} />
+        <div style={{ display: "flex", gap: 8 }}>
+          <div style={{ flex: 1 }}>
+            <label style={S.label}>Date</label>
+            <input style={S.input} type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+          </div>
+          <div style={{ flex: 1 }}>
+            <label style={S.label}>Portions</label>
+            <input style={S.input} type="number" min="1" value={qty} onChange={(e) => setQty(e.target.value)} />
+          </div>
+          <div style={{ flex: 1 }}>
+            <label style={S.label}>Personnes</label>
+            <input style={S.input} type="number" min="1" value={people} onChange={(e) => setPeople(e.target.value)} />
+          </div>
+        </div>
+        <button type="submit" style={S.primaryBtn}>
+          Ajouter au congélateur
+        </button>
+      </form>
+
+      {available.length === 0 && <p style={{ color: "#9B998F", fontSize: 14, textAlign: "center", marginTop: 20 }}>Le congélateur est vide.</p>}
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {available.map((item) => {
+          const d = new Date(item.date + "T00:00:00");
+          const dateLabel = `${d.getDate()} ${MOIS[d.getMonth()].toLowerCase()}`;
+          return (
+            <div key={item.id} style={S.dayCard}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <span style={{ fontSize: 22 }}>❄️</span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <p style={{ fontSize: 14.5, fontWeight: 500, color: "#2B2B26", margin: 0 }}>{item.name}</p>
+                  <p style={{ fontSize: 12, color: "#9B998F", margin: "2px 0 0" }}>
+                    Congelé le {dateLabel} — {item.qty} portion{item.qty > 1 ? "s" : ""} — {item.people} pers.
+                  </p>
+                </div>
+                <button style={S.iconBtnSm} onClick={() => deleteFreezerItem(item.id)} title="Supprimer">
+                  <Trash2 size={13} color="#B85C4A" />
+                </button>
+              </div>
+
+              {sendingId === item.id ? (
+                <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 6 }}>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <select style={{ ...S.select, flex: 1 }} value={sendDate} onChange={(e) => setSendDate(e.target.value)}>
+                      {next7.map((d) => {
+                        const key = fmtKey(d);
+                        return (
+                          <option key={key} value={key}>
+                            {JOURS[d.getDay()]} {d.getDate()}/{d.getMonth() + 1}
+                          </option>
+                        );
+                      })}
+                    </select>
+                    <select style={{ ...S.select, flex: 1 }} value={sendMeal} onChange={(e) => setSendMeal(e.target.value)}>
+                      <option value="midi">Midi</option>
+                      <option value="soir">Soir</option>
+                    </select>
+                  </div>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button style={S.secondaryBtn} onClick={() => setSendingId(null)}>
+                      Annuler
+                    </button>
+                    <button style={S.primaryBtn} onClick={confirmSend}>
+                      Confirmer l'envoi
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <button style={{ ...S.routineBtn, marginTop: 10 }} onClick={() => openSend(item)}>
+                  <span style={{ fontSize: 12.5, color: "#4E6B57", fontWeight: 500 }}>Envoyer vers un repas</span>
+                </button>
+              )}
+            </div>
+          );
+        })}
       </div>
     </div>
   );
