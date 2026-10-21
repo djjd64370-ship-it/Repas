@@ -481,6 +481,15 @@ function MealApp({ user }) {
     const day = { ...(planning[dateKey] || {}) };
     day[meal] = merged;
     savePlanning({ ...planning, [dateKey]: day });
+
+    // Lie le plat congelé à la liste de recettes : crée la recette si elle n'existe pas,
+    // sinon met juste à jour son décompte de jours (sans jamais imposer l'emoji ❄️ ici).
+    const existing = recipes.find((r) => r.name.trim().toLowerCase() === item.name.trim().toLowerCase());
+    if (existing) {
+      saveRecipes(recipes.map((r) => (r.id === existing.id ? { ...r, lastCooked: dateKey } : r)));
+    } else {
+      saveRecipes([...recipes, { id: uid(), name: item.name.trim(), link: "", lastCooked: dateKey, ingredients: [] }]);
+    }
   }
   function removeFreezerFromSlot(dateKey, weekday, meal, freezerId) {
     const eff = getEffectiveSlot(dateKey, weekday, meal, planning, routine);
@@ -516,7 +525,14 @@ function MealApp({ user }) {
 
   const filteredRecipes = recipes
     .filter((r) => r.name.toLowerCase().includes(search.toLowerCase()))
-    .sort((a, b) => a.name.localeCompare(b, "fr"));
+    .sort((a, b) => {
+      const da = daysSince(a.lastCooked);
+      const db = daysSince(b.lastCooked);
+      const va = da === null ? Infinity : da;
+      const vb = db === null ? Infinity : db;
+      if (va !== vb) return vb - va;
+      return a.name.localeCompare(b.name, "fr");
+    });
 
   // Construction de la liste de courses : regroupe les produits identiques,
   // garde la date la plus proche pour le tri et pour la clé "déjà acheté"
